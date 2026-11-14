@@ -1,5 +1,7 @@
 import { stripTags } from "@/lib/text";
 export { stripTags };
+import { APICallError, generateText } from "ai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { isRomantic, type Prefs, type TrackInfo, type Humor, type Language, type ListenMode } from "./prefs";
 import type { Headline } from "./news";
 
@@ -76,7 +78,7 @@ function banter(k: K, hour: number | undefined, me: string): string {
     mr: {
       morning: [`सुप्रभात ${me}! आधी चहा, मग जग.`], afternoon: [`दुपारची झोप? या स्टेशनवर नाही चालणार.`],
       evening: [`संध्याकाळ झाली ${me}, जरा आराम करा.`], late: [`रात्री जागणाऱ्यांना सलाम, ${me}.`],
-      any: [`खरं सांगू ${me}, तुमची गाण्यांची आवड भारी आहे.`, `छोटीशी आठवण: पाणी प्या, ${me}.`],
+      any: [`खरं सांगू ${me}, तुमची गाण्यांची आवड भारी आहे.`, `छोटीशी आठवण: प��णी प्या, ${me}.`],
     },
   };
   return pick([...B[k][slot], ...B[k].any]);
@@ -135,7 +137,7 @@ const MODE_LINES: Record<"gym" | "drive" | "focus", Record<"en" | "hi" | "hl" | 
   drive: {
     en: ["Long road, good company, better music.", "If there's traffic, this song is your excuse to sing louder.", "Windows down, volume up, {me}. Sing it like nobody's listening!", "Road's open, {me}. This one's a singalong, don't hold back!"],
     hl: ["Lambi road, achhi company, aur usse bhi achha music.", "Traffic mein phase ho? Toh aur zor se gaao!", "Windows neeche, volume upar, {me}! Gaana zor se gaana!", "Road khula hai, {me}. Is gaane pe singalong compulsory hai!"],
-    hi: ["खिड़कियाँ नीचे, आवाज़ ऊपर, {me}! ज़ोर से गाइए!", "सड़क खुली है, {me}। इस गाने पर साथ में गाना ज़रूरी है!"],
+    hi: ["खिड़कियाँ नीचे, आवाज़ ऊ���र, {me}! ज़ोर से गाइए!", "सड़क खुली है, {me}। इस गाने पर साथ में गाना ज़रूरी है!"],
     mr: ["खिडक्या खाली, आवाज वर, {me}! मोठ्याने गा!", "रस्ता मोकळा आहे, {me}. या गाण्यावर सोबत गायलंच पाहिजे!"],
   },
   focus: {
@@ -351,7 +353,7 @@ const anthropicHeaders = (key: string, model: string): Record<string, string> =>
   ...(/sonnet-5-5|opus-5-5/.test(model) ? { "anthropic-beta": "server-side-fallback-2026-07-01" } : {}),
 });
 
-/** Writes the RJ script with an LLM. Anthropic Claude first, then any OpenAI-compatible API. Null on failure/timeout. */
+/** Writes an RJ script using Gemini first, then optional legacy providers; null lets the template generator take over. */
 export function splitMood(t: string): { mood?: "hype" | "cheerful" | "warm" | "calm"; text: string } {
   const m = t.match(/^\s*\[([a-z]+)\]\s*/i);
   const mood = m && (["hype", "cheerful", "warm", "calm"].includes(m[1].toLowerCase()) ? (m[1].toLowerCase() as "hype") : undefined);
@@ -391,6 +393,27 @@ export async function llmScript(input: SegmentInput): Promise<string | null> {
   // Newlines are kept until the hidden ANSWER line is split off (route.ts), then collapsed there.
   const clean = (t?: string | null) => t?.replace(/[*_#`]/g, "").replace(/^(\s*\[[a-z]+\]\s*)?["']/i, "$1").replace(/["']$/, "").replace(/[ \t]+/g, " ").trim() || null;
   const isSkip = (t: string) => /^(\[\w+\]\s*)?skip\.?$/i.test(t);
+
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    try {
+      const google = createGoogleGenerativeAI({ apiKey: geminiKey });
+      const generated = await generateText({
+        model: google("gemini-2.5-flash-lite"),
+        system: systemPrompt(prefs, mode),
+        prompt: user,
+        maxOutputTokens: seg === "sensual_story" ? 600 : 384,
+        temperature: 0.9,
+        maxRetries: 0,
+        abortSignal: AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS ?? (seg === "sensual_story" ? 20000 : 8000))),
+      });
+      const t = clean(generated.text);
+      if (t) return isSkip(t) ? "" : t;
+    } catch (error) {
+      const rateLimited = error instanceof APICallError && error.statusCode === 429;
+      console.warn(rateLimited ? "Gemini free-tier rate limit reached; using configured fallbacks" : "Gemini generation failed; using configured fallbacks");
+    }
+  }
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (anthropicKey) {

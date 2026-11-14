@@ -21,6 +21,18 @@ test("voice: the Go Live tap unlocks audio, RJ clip plays audibly, mascot never 
   expect(realErrors(w)).toEqual([]);
 });
 
+test("voice: selected device Speech Synthesis speaks directly without cloud TTS", async ({ context, page }, ti) => {
+  const w = await setup(context, page, { mobile: mob(ti.project.name), prefs: { voiceId: "browser:auto" }, segmentMs: 400, songMs: 8000 });
+  await page.goto("/live"); await goLive(page, w);
+  await expect.poll(() => page.evaluate(() => (window as any).__speech.length), { timeout: 20000 }).toBeGreaterThan(0);
+  const said = await page.evaluate(() => (window as any).__speech.join(" "));
+  expect(said.length).toBeGreaterThan(30);
+  expect(w.tts, "browser voice does not call the cloud TTS route").toEqual([]);
+  const d = await diag(page);
+  expect(d["rj voice"]).toMatch(/native browser speech/i);
+  expect(realErrors(w)).toEqual([]);
+});
+
 test("voice: Azure failing (TTS 502) falls back to the browser voice and the show continues", async ({ context, page }, ti) => {
   const w = await setup(context, page, { mobile: mob(ti.project.name), faults: { tts502: true }, segmentMs: 400, songMs: 8000 });
   await page.goto("/live"); await goLive(page, w);
